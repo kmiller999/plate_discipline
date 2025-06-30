@@ -1,0 +1,900 @@
+---
+title: "Plate Discipline Dimensionality Reduction"
+author: "Kevin Miller"
+date: today
+output: html_document
+toc: true 
+toc-depth: 3
+bibliography: assets/references.bib
+csl: assets/apa.csl
+code-overflow: wrap
+---
+
+## TL;DR
+
+Major League hitters must balance three competing drives to provide offensive value for their team:
+
+1\. Taking advantage of good pitches to hit
+
+2\. Not swinging at pitches out of the zone, which are more likely to produce an out or an unfavorable count
+
+3\. Making the pitcher throw more pitches to better gauge their arsenal and create a more stressful plate appearance
+
+Accordingly, hitters attempt to find an optimal strategy to create the most value for their team, which is highly individualized based on the player's skill set and offensive role within the team.
+
+Here, I analyzed aggregated swing decision data (e.g., zone swing %, out of zone swing %, meatball swing percent %, and overall swing %) from qualifying MLB hitters within each season from 2021 to 2024. As an exploratory, proof-of-concept analysis, I performed Principal Component Analysis on these swing decision features to collapse similar sources of variance. The resulting principal components included a first component that captured a hitter's tendency to swing in general, while the second component distinguished a hitter's tendency to swing at good pitches while limiting the tendency to swing at bad ones. This pattern was largely consistent between seasons, as the first component had an intraclass correlation of .933 and the second had an intraclass correlation of .873.
+
+These findings–while preliminary–suggest there may be more variance in how frequently a hitter swings more generally than a hitter's ability to swing at good pitches (e.g., pitches in the zone, or meatballs in the middle of the zone) at the expense of swinging at pitches out of the zone. This calls into question the use of metrics like chase rate, as these may be confounded by a hitter's tendency to swing more generally, rather than being entirely reflective of a hitter's ability to not chase pitches. Future swing decision analyses can build off these results by investigating these constructs with greater specificity, including more contextual data that might impact swing decisions.
+
+## 1: Overview and Motivation for Analyses
+
+Put simply, hitting in the Major Leagues is one of the most challenging tasks in all of sports. Hitters must decide whether or not to swing in a mere fraction of a second, while pitchers throw multiple pitches to try and deceive the hitter. This creates a constant dilemma wherein hitters try not to miss good pitches to hit (e.g., pitches in the zone, or meatballs that are in the middle of the zone), while trying not to swing at pitches out of the zone, which are less optimal for hitting. Additionally, hitters are praised for "working the count" and seeing more pitches, as pitch counts have increasingly become a proxy for how fatigued and vulnerable a pitcher is to giving up runs. Chase rate and other swing-rate percentages are commonly used as proxies for how "disciplined" a hitter is (i.e., how likely or unlikely they are to swing at bad pitches), but it is still challenging to discern whether a hitter is truly good at discerning good from bad pitches, or if they are just employing a strategy to swing at fewer pitches to work the count.
+
+Having played baseball for years as both a hitter and pitcher, I am continually fascinated with how hitters strike a balance between these competing priorities. Some hitters are more selective earlier in the count to ensure they see a few pitches, even if this means they might miss a good pitch to hit. Other hitters employ a more aggressive approach, which decreases the likelihood they will miss a good pitch to hit, but can leave them more vulnerable to swinging at less ideal pitches to hit. Striking an ideal balance between these competing goals requires good pitch discernment (similar terms include pitch recognition), which enables hitters to better discern good pitches to hit from bad ones. My goal in this report was to create a data-driven separation between hitting strategy and pitch discernment, as many common metrics of pitch selection capture some combination of both constructs (e.g., chase rate). Thus, I chose Principal Component Analysis as a way to collapse and restructure variance from correlated features to accomplish this.
+
+## 2: Data Preparation
+
+The data for these analyses comes from [Baseball Savant's Custom Leaderboard](https://baseballsavant.mlb.com/leaderboard/custom?year=2024&type=batter&filter=&min=q&selections=pa%2Ck_percent%2Cbb_percent%2Cwoba%2Cxwoba%2Csweet_spot_percent%2Cbarrel_batted_rate%2Chard_hit_percent%2Cavg_best_speed%2Cavg_hyper_speed%2Cz_swing_percent%2Coz_swing_percent%2Coz_contact_percent%2Cout_zone_percent%2Cmeatball_swing_percent%2Cmeatball_percent%2Cpitch_count%2Ciz_contact_percent%2Cin_zone_percent%2Cedge_percent%2Cwhiff_percent%2Cswing_percent&chart=false&x=pa&y=pa&r=no&chartType=beeswarm&sort=pa&sortDir=desc) functionality. I selected the same columns for each season of data: 2021 [@statcast], 2022 [@statcasta], 2023 [@statcastb], and 2024 [@statcastc]. Only hitters with a qualifying number of plate appearances (502 in a season) were included, as this ensures all hitters had a large sample size. I performed the same analyses for each season, as this reduces any potential cohort effects specific to any given season. The metrics I chose to be features in the Principal Component Analysis model included the percentage a hitter swung at pitchers in the zone (`z_swing_percent`), out of the zone (`oz_swing_percent`), meatballs (`meatball_swing_percent`), and the percentage a hitter swung at all pitches (`swing_percent`). Baseball Savant did not provide a definition for a meatball, but the term generally implies a very hittable pitch in the middle of the strike zone.
+
+While I acknowledge that using these features does not take into account other important factors (e.g., the count the hitter is in, how the hitter is generally pitched, etc.), I wanted to focus solely on the hitter's general tendencies for the sake of this proof-of-concept analysis. I discuss additional information that would add more context to these results in section [11: Future Directions].
+
+Here are the data preparation steps I took in sequential order:
+
+1.  Read in the data from .csv files
+2.  Create pitches per plate appearance (`pitches_per_pa`), since this metrics was not available
+3.  Create a `decisions_df_{year}` dataframe for the features of interest for each year
+4.  Separate out default, performance-related columns into `performance_df`
+5.  Create a `disc_metrics_df_{year}` dataframe for the discipline metrics of interest for each year
+6.  Created a correlation plot among the 2024 features to show potential associations between each
+
+```{python}
+# import libraries to be used in these analyses
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import pingouin
+import plotly.express as px
+from IPython.display import Markdown, display
+```
+
+```{python}
+# import yearly data as csvs 
+disc_df_24 = pd.read_csv('data/plate_discipline_24.csv')
+disc_df_23 = pd.read_csv('data/plate_discipline_23.csv')
+disc_df_22 = pd.read_csv('data/plate_discipline_22.csv')
+disc_df_21 = pd.read_csv('data/plate_discipline_21.csv')
+
+# inspect columns
+disc_df_24.columns
+```
+
+```{python}
+# create new variable (pitches_pa) as the avg. number of pitches in a plate appearance
+disc_df_24['pitches_pa'] = disc_df_24['pitch_count']/disc_df_24['pa']
+disc_df_23['pitches_pa'] = disc_df_23['pitch_count']/disc_df_23['pa']
+disc_df_22['pitches_pa'] = disc_df_22['pitch_count']/disc_df_22['pa']
+disc_df_21['pitches_pa'] = disc_df_21['pitch_count']/disc_df_21['pa']
+```
+
+```{python}
+# create decisions_df_ for each year as features of interest
+decisions_df_24 = disc_df_24[[
+    'z_swing_percent', 'oz_swing_percent', 'meatball_swing_percent', 'swing_percent'
+    ]].copy()
+decisions_df_23 = disc_df_23[[
+    'z_swing_percent', 'oz_swing_percent', 'meatball_swing_percent', 'swing_percent'
+    ]].copy()
+decisions_df_22 = disc_df_22[[
+    'z_swing_percent', 'oz_swing_percent', 'meatball_swing_percent', 'swing_percent'
+    ]].copy()
+decisions_df_21 = disc_df_21[[
+    'z_swing_percent', 'oz_swing_percent', 'meatball_swing_percent', 'swing_percent'
+    ]].copy()
+```
+
+```{python}
+# save performance metrics for exploratory analysis
+performance_df_24 = disc_df_24[[
+    'woba', 'xwoba', 'sweet_spot_percent', 'barrel_batted_rate', 'hard_hit_percent'
+]].copy()
+```
+
+```{python}
+# create disc_metrics_df_ for each year as outputs of interest
+disc_metrics_df_24 = disc_df_24[[
+    'pitches_pa', 'k_percent', 'bb_percent'
+]].copy()
+disc_metrics_df_23 = disc_df_23[[
+    'pitches_pa', 'k_percent', 'bb_percent'
+]].copy()
+disc_metrics_df_22 = disc_df_22[[
+    'pitches_pa', 'k_percent', 'bb_percent'
+]].copy()
+disc_metrics_df_21 = disc_df_21[[
+    'pitches_pa', 'k_percent', 'bb_percent'
+]].copy()
+```
+
+### 2.1: Feature Investigation
+
+```{python}
+# show scatter_matrix to illuminate relationships between features
+fig = px.scatter_matrix(
+        decisions_df_24, 
+        dimensions=[
+            'swing_percent', 'z_swing_percent', 'oz_swing_percent', 'meatball_swing_percent'
+        ], 
+        labels={
+            'swing_percent': 'Overall Swing',
+            'z_swing_percent': 'Zone Swing', 
+            'oz_swing_percent': 'Out of Zone Swing', 
+            'meatball_swing_percent': 'Meatball Swing', 
+        }
+        )
+# remove diagonal and upper half
+fig.update_traces(
+    showupperhalf=False, diagonal_visible=False
+)
+```
+
+------------------------------------------------------------------------
+
+The swing decision metrics are clearly related, which should be expected, given how each feature represents a hitter's tendency to swing in a certain context. The following section will discuss the significance of this, and why Principal Component Analysis is an appropriate technique to use in this scenario.
+
+## 3: PCA
+
+Principal Component Analysis (PCA) is a dimensionality reduction technique that re-captures the variance of dataset features as new, non-correlated components [@principa2025]. This enables PCA to capture large portions of a datset's variance with fewer components, as a Principal Component (PC) can simultaneously represent the same variance from multiple features. This made PCA an appropriate technique for this data, since I knew the four features of interest were highly correlated and related to some tendency to swing. Thus, I predicted that the first PC would relate to a hitter's tendency to swing in general, since that was the commonality among the four features. Once the variance from the general tendency to swing was accounted for–and thus removed from the model–I predicted the remaining variance captured by the second PC would relate to a hitter's pitch discernment (i.e., tendency to swing at good pitches instead of bad ones), since that was largely what differentiated the four features of interest.
+
+### 3.1: PCA Function
+
+Because I intended to perform PCA on the same features for each year, I created a function that could run PCA and save the outputs for further investigation. Since I would need to map the PCs back to the original dataframes, I created dictionaries that linked season arguments (e.g., 2024) back to the `disc_metrics_df_` and `disc_df_` dataframes corresponding to that season.
+
+Here are the steps of the function laid out sequentially:
+
+1.  Standardize the data so each feature has a mean of 0 and standard deviation of 1
+2.  Fit the PCA model to the standardized data to create a PCA model with the same number of PCs as the number of features
+3.  Create a covariance matrix to calculate eigenvalues and the proportion of variance captured by each PC
+4.  Store eigenvalues and captured variance in a table and figures
+5.  Create a loadings table to show how PCs relate to the original features
+6.  Create a biplot figure to show superimposed loading scores on top of standardized data (code adapted from Plotly's PCA documentation [@pcavisu])
+7.  Transform each player's standardized data to PC1 and PC2 scores and map PC1 and PC2 columns back to original dataframe
+8.  Define correlation plot to show how PCs relate to discipline metrics (e.g., pitcher per plate appearance, strikeout percentage, and walk percentage)
+9.  Organize each output for easy calls later
+
+```{python}
+# create dictionary to map results back to its disc_metrics_df
+disc_metrics_dict = {
+    "2021": disc_metrics_df_21,
+    "2022": disc_metrics_df_22,
+    "2023": disc_metrics_df_23,
+    "2024": disc_metrics_df_24
+}
+
+# create dictionary to map results back to its disc_df
+disc_dict = {
+    "2021": disc_df_21,
+    "2022": disc_df_22,
+    "2023": disc_df_23,
+    "2024": disc_df_24
+}
+```
+
+```{python}
+# accept dataframe and year (e.g., 2024) as arguments, along with year and df mappings
+def run_PCA(df, disc_metrics_dict, disc_dict, year):
+    # scale data to have mean of 0 and sd of 1 (standardized)
+    scaler = StandardScaler()
+    # create as dataframe with original columns
+    standardized_decisions_df = pd.DataFrame(
+        scaler.fit_transform(df), columns = df.columns
+        )
+
+    # initialize PCA object, with number of components as length of features
+    pca = PCA(
+        n_components=standardized_decisions_df.shape[1]
+    )
+
+    # run PCA
+    pca.fit(standardized_decisions_df)
+    # fit PCA model to scaled data for further examination
+    vars_pca = pd.DataFrame(
+        pca.transform(standardized_decisions_df), 
+        columns=['PC1', 'PC2', 'PC3', 'PC4']
+        )
+
+    # create covariance matrix as product of matrix multiplication, divided by number of observations
+    cov_matrix = np.dot(
+        standardized_decisions_df.T, 
+        standardized_decisions_df
+        )/standardized_decisions_df.shape[0]
+    
+    # create array of eigenvalues using product of cov_matrix with each component
+    eigenvalues = np.array(
+        [
+            np.dot(eigenvector.T, np.dot(cov_matrix, eigenvector))
+            for eigenvector in pca.components_
+            ]
+    )
+
+    # calculate the proportion of total variance each component accounts for
+    prop_var = eigenvalues/np.sum(eigenvalues)
+
+    # create dataframe to display Eigenvalue and Explained Variance for each PC
+    PC_values = pd.DataFrame(
+        {
+        'Eigenvalue': eigenvalues,
+        'Explained Variance': prop_var, 
+        }, 
+        index = ['PC1', 'PC2', 'PC3', 'PC4']
+        )
+
+    # create figure to plot eigenvalues for each PC
+    eigenvalue_fig = px.line(
+        PC_values, 
+        x=PC_values.index,
+        y="Eigenvalue", 
+        labels={
+            'index': 'Principal Component', 
+            'Eigenvalue': 'Eigenvalue'
+            }
+        )
+    # add horizontal line at 1 for people who like this rule
+    eigenvalue_fig.add_hline(y=1, line_color="red", line_dash="dash")
+
+    # create figure to plot eigenvalues for each PC
+    variance_fig = px.line(
+        PC_values, 
+        x=PC_values.index,
+        y="Explained Variance",
+        labels={
+            'index': 'Principal Component', 
+            'Explained Variance': 'Variance Explained (Proportion)'
+            }
+    )
+
+    # create dataframe to map loading scores of original features to PCs 
+    loadings = pd.DataFrame(
+        pca.components_.T, 
+        columns = ['PC1', 'PC2', 'PC3', 'PC4'], 
+        index = standardized_decisions_df.columns
+    )
+    
+    # save feature loadings for biplot figure
+    biplot_loadings = pca.components_
+
+    # save features 
+    features = standardized_decisions_df.columns
+
+    # Code for biplot figure adapted from Plotly (n.d.)
+    # create biplot to visualize data and feature loadings in same figure
+    # initialize figure as scatterplot using observations in feature space
+    biplot_fig = px.scatter(vars_pca, x='PC1', y='PC2')
+
+    # loop through feature loading scores 
+    # draw arrows from origin to loading scores on PC1 and PC2
+    for i, feature in enumerate(features):
+        biplot_fig.add_annotation(
+            ax=0, ay=0, 
+            axref="x", ayref="y",
+            x=biplot_loadings[0, i],
+            y=biplot_loadings[1, i],
+            showarrow=True,
+            arrowsize=2,
+            arrowhead=2,
+            xanchor="right",
+            yanchor="top"
+        )
+        biplot_fig.add_annotation(
+            x=biplot_loadings[0, i],
+            y=biplot_loadings[1, i],
+            ax=0, ay=0, 
+            xanchor="center",
+            yanchor="bottom",
+            text=feature,
+            yshift=5
+        )
+        # soften the data points to make feature loadings clearer
+        biplot_fig.update_traces(opacity=0.3)
+
+    # transform scaled data to create PC1 and PC2 scores for each hitter
+    PC1 = pd.DataFrame(
+        pca.fit_transform(standardized_decisions_df)[:, 0], 
+        columns=['PC1']
+        )
+    PC2 = pd.DataFrame(
+        pca.fit_transform(standardized_decisions_df)[:, 1], 
+        columns=['PC2']
+        )
+        
+    # create df strings for multiple uses
+    # map back toperformance_df_24_ using year_suffix
+    disc_metrics_dict[year]['PC1'] = PC1['PC1']
+    disc_metrics_dict[year]['PC2'] = PC2['PC2']
+
+    disc_dict[year]['PC1'] = PC1['PC1']
+    disc_dict[year]['PC2'] = PC2['PC2']
+
+    # create correlation plot for PCs and discipline metrics
+    corr_plot = px.scatter_matrix(
+        disc_metrics_dict[year], 
+        dimensions=[
+            'PC1', 'PC2', 'pitches_pa', 'k_percent', 'bb_percent'
+        ], 
+        labels={
+            'PC1': 'PC1', 
+            'PC2': 'PC2', 
+            'pitches_pa': 'Pitches per PA', 
+            'k_percent': 'Strikeout %', 
+            'bb_percent': 'Walk %'
+        }
+        )
+    corr_plot.update_traces(
+        showupperhalf=False, diagonal_visible=False
+    )
+
+
+    # define results set as outputs to call after running
+    return {
+        'pc_values': PC_values,
+        'loadings': loadings,
+        'disc_metrics_df': disc_metrics_dict[year],
+        'disc_df': disc_dict[year],
+        'eigenvalue_fig': eigenvalue_fig, 
+        'variance_fig': variance_fig, 
+        'biplot_fig': biplot_fig,
+        'corr_plot': corr_plot
+    }
+```
+
+# 4: 2024
+
+Now we can call the function on the 2024 data and inspect the results sequentially.
+
+```{python}
+# run PCA for 2024
+PCA_results_24 = run_PCA(
+    df=decisions_df_24, 
+    disc_dict=disc_dict, 
+    disc_metrics_dict=disc_metrics_dict, 
+    year="2024"
+    )
+```
+
+```{python}
+#| column: body
+#| layout: [[40, 60]]
+
+# show PC eigenvalue/explained variance as table
+display(Markdown(PCA_results_24['pc_values'].round(3).to_markdown()))
+# show loading scores of features to show what PCs mean
+display(Markdown(PCA_results_24['loadings'].round(3).to_markdown()))
+```
+
+The eigenvalues and proportion of explained variance quantify how effective each PC is at capturing the model variance in feature space. The proportion of explained variance is calculated from the eigenvalues, which explains why the figures in the next output are nearly identical. Typically, an eigenvalue of one or more denotes a strong PC worth keeping in the model, but I also look to see where the "dropoff" in explained variance is, since that indicates when adding another PC does not substantially improve the model. Since PC1 and PC2 combine to explain nearly all of the variance in the model (97.2%), I opted to keep those two for further investigation.
+
+The loading scores relate each PC to the scaled features, and can be used to gauge which features that PC encapsulates. All four swing metrics load positively on PC1 (i.e., higher scores on each feature tend to have higher PC1 scores), which suggests PC1 represents the general tendency to swing. Outside of zone swing and swing percentage load positively on PC2, whereas zone swing and meatball swing load negatively. This suggests PC2 represents the tendency to swing at pitches out of the zone or at any pitch, without swinging more at meatballs or pitches in the zone.
+
+```{python}
+#| column: body
+#| layout-ncol: 2 
+PCA_results_24['eigenvalue_fig'].show()
+PCA_results_24['variance_fig'].show()
+```
+
+```{python}
+PCA_results_24['biplot_fig']
+```
+
+------------------------------------------------------------------------
+
+The biplot figure shows the PC1 and PC2 loading scores for each of the four features, superimposed on the data in feature space. This further supports the idea that PC1 captured all four features, whereas PC2 began to distinguish meatball and zone swing percentage from out of zone and overall swing percentage.
+
+```{python}
+PCA_results_24['corr_plot']
+```
+
+------------------------------------------------------------------------
+
+While none of this data is causal or experimentally controlled, it is still valuable to compare these PCs to the key metrics the constructs *should* be related to. A few potential associations jump out:
+
+-   PC1 is negatively associated with pitches per plate appearance
+
+-   PC1 is negatively associated with walk percentage
+
+-   PC2 is negatively associated with walk percentage
+
+Taken together, the PC1 plots suggest players who score higher on PC1 tend to see fewer pitches and walk less frequently than players who score lower on PC1. The negative association between PC2 and walk percentage suggests players who score higher on PC2 tend to walk less frequently than players who score lower on PC2. The rest of the metrics only appear to be minimally associated with either PC1 or PC2.
+
+### 4.1: Outcomes Relation
+
+As emphasized earlier, I knew the features I chose for the PCA model did not take into account how the hitter was pitched. Rather than including features that represented the percentage of time hitters saw pitches out of the zone (`out_zone_percent`) or on the edge of the zone (`edge_percent`), I decided to look at how the PCs related to these metrics. For the sake of interpretability, I excluded the percentage of pitches in the zone (`in_zone_percent`), as this metric is complementary to `out_zone_percent`. While I could not find Baseball Savant's definition for how it defines an edge pitch, this term implies a pitch on the edge of the strike zone, which can be in or out of the zone (i.e., the same pitch can count towards `out_zone_percent` and `edge_percent`).
+
+I also decided to investigate whether PC1 or PC2 might relate to common performance metrics that Baseball Savant provides. Definitions of each metric can be found in the Statcast Glossary section of [Baseball Savant's Custom Leaderboard](https://baseballsavant.mlb.com/leaderboard/custom?year=2024&type=batter&filter=&min=q&selections=pa%2Ck_percent%2Cbb_percent%2Cwoba%2Cxwoba%2Csweet_spot_percent%2Cbarrel_batted_rate%2Chard_hit_percent%2Cavg_best_speed%2Cavg_hyper_speed%2Cz_swing_percent%2Coz_swing_percent%2Coz_contact_percent%2Cout_zone_percent%2Cmeatball_swing_percent%2Cmeatball_percent%2Cpitch_count%2Ciz_contact_percent%2Cin_zone_percent%2Cedge_percent%2Cwhiff_percent%2Cswing_percent&chart=false&x=pa&y=pa&r=no&chartType=beeswarm&sort=pa&sortDir=desc) page, which was used to acquire the data for this report (see section [2: Data Preparation]):
+
+-   Expected weighted on-base average (`xwoba`)
+
+-   Percent of batted-ball events with a launch angle between eight and 32 degrees (`sweet_spot_percent`)
+
+-   Percent of batted balls with perfect combination of exit velocity and launch angle (`barrel_batted_rate`)
+
+-   Ball hit with an exit velocity of 95 mph or higher (`hard_hit_percent`)
+
+Since I lacked any notion of how the PCs might relate to these performance metrics, I decided to look at potential associations from a purely exploratory lens.
+
+```{python}
+# add out_of_zone and edge_percent to disc_metrics_df_24
+disc_metrics_df_24['out_zone_percent'] = disc_df_24['out_zone_percent'].copy()
+disc_metrics_df_24['edge_percent'] = disc_df_24['edge_percent'].copy()
+```
+
+```{python}
+# add performance metrics to disc_metrics_df_24
+disc_metrics_df_24['xwoba'] = performance_df_24['xwoba'].copy()
+disc_metrics_df_24['sweet_spot_percent'] = performance_df_24['sweet_spot_percent'].copy()
+disc_metrics_df_24['barrel_batted_rate'] = performance_df_24['barrel_batted_rate'].copy()
+disc_metrics_df_24['hard_hit_percent'] = performance_df_24['hard_hit_percent'].copy()
+```
+
+```{python}
+# show correlation plots between PCs and out of zone/edge pitches seen
+pitch_corr_plot = px.scatter_matrix(
+    disc_metrics_df_24, 
+    dimensions=[
+        'PC1', 'PC2', 'out_zone_percent', 'edge_percent'
+        ], 
+    labels={
+        'PC1': 'PC1',
+        'PC2': 'PC2', 
+        'out_zone_percent': 'Out of Zone %', 
+        'edge_percent': 'Edge %'
+    }
+)
+pitch_corr_plot.update_traces(
+    showupperhalf=False, diagonal_visible=False)
+```
+
+------------------------------------------------------------------------
+
+The associations between PC scores and pitches seen do not appear to be as strong as the associations between PC scores and discipline metrics, but a couple are still worth noting:
+
+-   PC1 is positively associated with percentage of pitches seen out of the zone
+
+-   PC1 is negatively associated with percentage of pitches on the edge of the zone
+
+-   PC2 does not appear to have an association with the percentage of pitches out of the zone or on the edge of the zone
+
+PC1 appears to be positively associated with the percentage of pitches a hitter sees out of the zone, which may suggest hitters who score high on PC1 see more pitches out of the zone at the expense of pitches in the zone or on the edge. The potential negative association between PC1 and percentage of edge pitches seen supports this possibility. It would be difficult to discern if hitters with high PC1 scores see more pitches out of the zone, and subsequently swing more at those pitches, or if pitchers throw more pitches out of the zone in response to the hitter swinging at those pitches. This report is not equipped to answer that question, but it would be interesting to see if this could be disentangled with additional data. Meanwhile, PC2 does not appear to exhibit any associations with how the hitter is pitched.
+
+```{python}
+# show correlation plots between PCs and performance metrics
+perform_corr_plot = px.scatter_matrix(
+    disc_metrics_df_24, 
+    dimensions=[
+        'PC1', 'PC2', 'xwoba', 'sweet_spot_percent', 'barrel_batted_rate', 'hard_hit_percent',
+    ], 
+    labels={
+        'PC1': 'PC1', 
+        'PC2': 'PC2',
+        'xwoba': 'xwOBA',
+        'sweet_spot_percent': 'Sweet Spot %', 
+        'barrel_batted_rate': 'Barrel %', 
+        'hard_hit_percent': 'Hard Hit %'
+    }
+)
+perform_corr_plot.update_traces(
+    showupperhalf=False, diagonal_visible=False
+)
+```
+
+------------------------------------------------------------------------
+
+The potential associations between the PCs and performance metrics appear to be the weakest of all, which suggests that PC scores alone may have little to do with a hitter's performance. The plots for PC1 appear to be mostly noise, whereas PC2 may have very weak negative associations with xwOBA, barrel percentage, and hard hit percentage. This suggest hitters with higher PC2 scores–who tend to swing at more pitches out of the zone or more pitches overall–may tend to have lower hard hit and barrel percentages, as well as xwOBA.
+
+## PCA Interpretation
+
+To reiterate the PCA results, PC1 and PC2 combined to explain 97.2% of the variance in swing decisions. PC1 appeared captured a hitter's tendency to swing at any type of pitch, while PC2 captured the hitter's tendency to swing at any pitch or pitches out of the zone, at the expense of swinging at meatballs and pitches in the zone. As expected, PC1 was negatively associated with pitches per plate appearance and walk percentage, whereas PC2 was negatively associated with walk percentage. PC1 scores were positively associated with the percentage of pitches a hitter saw out of the zone, suggesting these hitters may see fewer good pitches to hit. Finally, neither PC1 nor PC2 exhibited strong associations with performance metrics, suggesting PC1 and PC2 scores alone are not related to the hitter's performance.
+
+Since I had data for each seasons and wanted to model the same data for each, I performed the same PCA analyses in the following sections. Since I already explained the results and interpretation for 2024, I provided an overall interpretation for all years combined after running all PCA models (see section [8: Inter-Year Interpretation]). I also forewent the exploratory analyses with the types of pitches a hitter saw and the hitter's performance for subsequent seasons, as I did not have formal predictions and did not see a reason to re-run these.
+
+# 5: 2023
+
+```{python}
+PCA_results_23 = run_PCA(df=decisions_df_23, disc_dict=disc_dict, disc_metrics_dict=disc_metrics_dict, year="2023")
+```
+
+```{python}
+#| column: body
+#| layout: [[40, 60]]
+display(Markdown(PCA_results_23['pc_values'].round(3).to_markdown()))
+display(Markdown(PCA_results_23['loadings'].round(3).to_markdown()))
+```
+
+```{python}
+#| column: body
+#| layout-ncol: 2
+PCA_results_23['eigenvalue_fig'].show()
+PCA_results_23['variance_fig'].show()
+```
+
+```{python}
+PCA_results_23['biplot_fig']
+```
+
+```{python}
+PCA_results_23['corr_plot']
+```
+
+# 6: 2022
+
+```{python}
+PCA_results_22 = run_PCA(df=decisions_df_22, disc_dict=disc_dict, disc_metrics_dict=disc_metrics_dict, year="2022")
+```
+
+```{python}
+#| column: body
+#| layout: [[40, 60]]
+display(Markdown(PCA_results_22['pc_values'].round(3).to_markdown()))
+display(Markdown(PCA_results_22['loadings'].round(3).to_markdown()))
+```
+
+```{python}
+#| column: body
+#| layout-ncol: 2
+PCA_results_22['eigenvalue_fig'].show()
+PCA_results_22['variance_fig'].show()
+```
+
+```{python}
+PCA_results_22['biplot_fig']
+```
+
+```{python}
+PCA_results_22['corr_plot']
+```
+
+# 7: 2021
+
+```{python}
+PCA_results_21 = run_PCA(df=decisions_df_21, disc_dict=disc_dict, disc_metrics_dict=disc_metrics_dict, year="2021")
+```
+
+```{python}
+#| column: body
+#| layout: [[40, 60]]
+display(Markdown(PCA_results_21['pc_values'].round(3).to_markdown()))
+display(Markdown(PCA_results_21['loadings'].round(3).to_markdown()))
+```
+
+```{python}
+#| column: body
+#| layout-ncol: 2
+PCA_results_21['eigenvalue_fig'].show()
+PCA_results_21['variance_fig'].show()
+```
+
+```{python}
+PCA_results_21['biplot_fig']
+```
+
+```{python}
+PCA_results_21['corr_plot']
+```
+
+# 8: Inter-Year Interpretation
+
+Despite some minute differences, the same general pattern emerged for the PCA results within each year. PC1 accounts for the vast majority of the variance in each year (72.3% - 78.9%), with positive loading scores from zone swing percentage (.536 - .549), out of zone swing percentage (.430 - .454), meatball swing percentage (.422 - .454), and overall swing percentage (.548 - .565). PC2 accounts for the majority of the variance not explained by PC1 in each year (18.4% - 23.9%). Combined, these two account for between 96.2% and 97.2% of the overall variance in swing decision features. While the loading score signs on PC2 vary between years, the pattern is consistent: meatball swing and zone swing percentage load in the opposite direction of out of zone swing and overall swing percentage. This pattern is far more important for interpretablity, as it shows PC2 begins to distinguish a player's tendency to swing at good pitches (meatball swing and zone swing percentage) as opposed to bad ones (out of zone swing percentage) or just any pitch (swing percentage).
+
+# 9: Run Intraclass Correlations Between Years
+
+Even though the PCs looked comparable between seasons, I tested the consistency of PC1 and PC2 loading scores using intraclass correlation (ICC). While this kind of test is better known for assessing subjective measurements from human raters, I used year as the rater and player as the subject being rated. For a primer on the subject, check out the Medium blog post from @assana2024 on the topic. Using the flow chart they provided, I decided to use the ICC3k test, based on the following criteria:
+
+-   The ICCs compared hitters' scores between each year (Inter-rater Reliability)
+
+-   The same years were used to rate each hitter, which were not randomized (Two-way Mixed Effects)
+
+-   Consistency between years was the primary metric of interest, rather than trying to compare a single year to all others (Mean of *k* raters)
+
+-   Consistency is more informative than absolute agreement, since some drift between seasons is expected (e.g., yearly changes in league-wide offensive production) and relative stability is the real metric of interest
+
+To perform ICC, I performed the following data preparation steps:
+
+1.  Invert PC2 scores for 2022 and 2024 to align all seasons, since the features loaded in the opposite direction of 2021 and 2023
+2.  Merge the seasons into one dataframe and select only relevant columns
+3.  Filter out players with fewer than four years of data
+4.  Run ICC on PC1 and PC2 using `year` as the rater, PC score as the ratings, and the hitter as the target
+5.  Interpret ICC3k test results
+
+```{python}
+# invert PC2 loading scores from 22 and 24 so all seasons match
+disc_df_24[['PC2']] = disc_df_24[['PC2']] * -1
+disc_df_22[['PC2']] = disc_df_22[['PC2']] * -1
+```
+
+```{python}
+# create one df for all seasons
+merged_dfs = pd.concat([
+    disc_df_24, 
+    disc_df_23, 
+    disc_df_22,
+    disc_df_21
+])
+```
+
+```{python}
+# select columns of interest for ICC
+icc_PCs = merged_dfs[[
+    'last_name, first_name', 'player_id', 'year', 'PC1', 'PC2'
+    ]].copy()
+icc_PCs.reset_index(drop=True, inplace=True)
+icc_PCs
+```
+
+```{python}
+# create logic to only include players with four seasons of data
+# count number of seasons for each player
+player_year_counts = icc_PCs.groupby('player_id')['year'].nunique()
+# create a list of players with four seasons
+four_year_players = player_year_counts[player_year_counts == 4].index 
+# separate out the players with four seasons
+full_icc_PCs = icc_PCs[icc_PCs['player_id'].isin(four_year_players)].copy()
+full_icc_PCs.head()
+```
+
+```{python}
+# run ICC on PC1, with player as target, year as rater, and PC1 scores as ratings
+PC1_ICC = pingouin.intraclass_corr(
+    full_icc_PCs, 
+    targets='player_id', 
+    raters='year', 
+    ratings='PC1', 
+    nan_policy='omit'
+    )
+PC1_ICC.set_index('Type')
+```
+
+------------------------------------------------------------------------
+
+PC1 exhibited an ICC of .933 (*F* = 14.91, *p* \< .001), indicative of highly correlated observations. Even though this application deviates from a typical ICC test, this result indicates excellent reliability of PC1 scores between seasons [@assana2024]. The plot below depicts a hitter's PC1 score for each year. The lines are a bit small and dense, but the legend on the right allows for toggling each hitter by clicking their name.
+
+```{python}
+# create line graph for year and PC
+fig = px.line(
+    full_icc_PCs, 
+    x='year', 
+    y='PC1', 
+    # use color for hitter
+    color='last_name, first_name',
+    height=1000,
+    # label each point with hitter's name
+    hover_data=['last_name, first_name', 'player_id'],
+    labels={'last_name, first_name': 'Player'},
+    title='PC1 Scores Between Years'
+)
+
+# update lines to make them more visible
+fig.update_traces(
+    marker=dict(size=5, opacity=0.1), 
+    line=dict(width=0.5)
+    )
+
+# fix x-axis for discrete years only
+fig.update_xaxes(
+    tickmode='array',
+    tickvals=[2021, 2022, 2023, 2024],
+    ticktext=['2021', '2022', '2023', '2024']
+)
+
+fig.show()
+```
+
+```{python}
+# run ICC on PC2, with player as target, year as rater, and PC2 scores as ratings
+PC2_ICC = pingouin.intraclass_corr(
+    full_icc_PCs, 
+    targets='player_id', 
+    raters='year', 
+    ratings='PC2', 
+    nan_policy='omit'
+    )
+PC2_ICC.set_index('Type')
+```
+
+------------------------------------------------------------------------
+
+PC2 yielded an ICC of .873 (*F* = 7.854, *p* \< .001), also indicating a highly significant correlation between seasons. This ICC would fall into the good reliability category, nearly attaining excellent reliability [@assana2024]. I adapted the code from the PC1 figure to plot PC2 scores across seasons below.
+
+```{python}
+fig = px.line(
+    full_icc_PCs, 
+    x='year', 
+    y='PC2', 
+    color='last_name, first_name',
+    height=1000,
+    hover_data=['last_name, first_name', 'player_id'],
+    labels={'last_name, first_name': 'Player'},
+    title='PC2 Scores Between Years'
+)
+
+fig.update_traces(
+    marker=dict(size=5, opacity=0.1), 
+    line=dict(width=0.5)
+    )
+
+fig.update_xaxes(
+    tickmode='array',
+    tickvals=[2021, 2022, 2023, 2024],
+    ticktext=['2021', '2022', '2023', '2024']
+)
+
+fig.show()
+```
+
+## 9.1: Yearly Deviations
+
+To add additional context to the ICC analyses, I calculated the root-mean squared deviation (RMSD) for PC1 and PC2, between seasons for each hitter. This created a mean score for each hitter to show how much their PC1 and PC2 scores varied between seasons, on average. When aggregated across players, this yields a picture of how much a typical hitters' PC scores varied between seasons. This required the following data preparation steps:
+
+1.  Find the mean PC1 and PC2 score for each hitter
+2.  Subtract each individual season score from the hitter's average score and square it (squared deviation)
+3.  Create a separate dataframe for RMSD calculations
+4.  Group by each hitter and calculate the average deviation between their actual and average score for each season, then square root that average (root mean)
+5.  Merge the RMSD scores back onto original dataframe and drop duplicates for each hitter
+6.  Calculate the mean, standard deviation, minimum, and maximum RMSD scores for PC1 and PC2 across all hitters
+
+```{python}
+# calculate the mean of PC1 for each player (across multiple seasons)
+full_icc_PCs['PC1_mean'] = full_icc_PCs.groupby(
+    ['player_id', 'last_name, first_name']
+    )['PC1'].transform('mean')
+# calculate the mean of PC2 for each player (across multiple seasons)
+full_icc_PCs['PC2_mean'] = full_icc_PCs.groupby(
+    ['player_id', 'last_name, first_name']
+    )['PC2'].transform('mean')
+
+# calculate the squared difference of PC1 and PC2 for each player across multiple seasons
+full_icc_PCs['PC1_sq_dev'] = (full_icc_PCs['PC1'] - full_icc_PCs['PC1_mean']) ** 2
+full_icc_PCs['PC2_sq_dev'] = (full_icc_PCs['PC2'] - full_icc_PCs['PC2_mean']) ** 2
+full_icc_PCs
+```
+
+```{python}
+# create a separate df for calculating rmsd
+rmsd_df = (
+    # take full_icc_PCs and group by each hitter
+    full_icc_PCs.groupby(['player_id', 'last_name, first_name']).agg(
+        # aggregate to calculate mean, then square root it to get back on unit variance
+        RMSD_PC1=(
+            'PC1_sq_dev', lambda x: np.sqrt(x.mean())
+        ), 
+        RMSD_PC2=(
+            'PC2_sq_dev', lambda x: np.sqrt(x.mean())
+        )
+    )
+    .reset_index()
+)
+rmsd_df.head()
+```
+
+```{python}
+# merge rmsd_df onto full_icc_PCs to get RMSD stats
+full_icc_PCs = full_icc_PCs.merge(
+    rmsd_df[['player_id', 'RMSD_PC1', 'RMSD_PC2']], 
+    # merge on player_id, only including where rmsd player_id matches
+    on='player_id', how='inner')
+full_icc_PCs
+```
+
+```{python}
+# drop multiple references to each hitter
+summary_icc_PCs = full_icc_PCs.drop_duplicates(subset='player_id')
+```
+
+```{python}
+#| column: body
+# calculate mean, standard deviation, minimum, and maximum for PC1 and PC2 
+mean_rmsd_PC1 = summary_icc_PCs['RMSD_PC1'].mean()
+std_rmsd_PC1 = summary_icc_PCs['RMSD_PC1'].std()
+min_rmsd_PC1 = summary_icc_PCs['RMSD_PC1'].min()
+max_rmsd_PC1 = summary_icc_PCs['RMSD_PC1'].max() 
+
+mean_rmsd_PC2 = summary_icc_PCs['RMSD_PC2'].mean()
+std_rmsd_PC2 = summary_icc_PCs['RMSD_PC2'].std()
+min_rmsd_PC2 = summary_icc_PCs['RMSD_PC2'].min()
+max_rmsd_PC2 = summary_icc_PCs['RMSD_PC2'].max() 
+
+# create dictionary for results to weave into dataframe
+rmsd_results = {
+    'Mean': [mean_rmsd_PC1, mean_rmsd_PC2],
+    'Standard Deviation': [std_rmsd_PC1, std_rmsd_PC2],
+    'Min': [min_rmsd_PC1, min_rmsd_PC2],
+    'Max': [max_rmsd_PC1, max_rmsd_PC2]
+}
+
+# create dataframe for easy display of aggregate stats
+rmsd_results_df = pd.DataFrame(
+    data=rmsd_results, 
+    index=['PC1', 'PC2']
+)
+
+# display as markdown table
+display(Markdown(rmsd_results_df.round(3).to_markdown()))
+```
+
+------------------------------------------------------------------------
+
+By looking at the aggregated RMSD scores, we can see that PC1 scores varied by roughly 0.57 units, on average, while PC2 scores varied by roughly 0.36 units, on average. This makes sense, as PC1 captured more variance in the PCA models than PC2, and should have more within-hitter variance. I included the plot below to add context and show the distribution of RMSD scores.
+
+```{python}
+# create scatterplot to display RMSD scores for each player
+fig = px.scatter(
+    summary_icc_PCs, 
+    x='RMSD_PC1',
+    y='RMSD_PC2', 
+    # user player info as hover data
+    hover_data=['last_name, first_name', 'player_id'],
+    labels={
+        'RMSD_PC1': 'PC1 RMSD', 
+        'RMSD_PC2': 'PC2 RMSD', 
+        'last_name, first_name': 'Player'
+        },
+    title='PC1 vs. PC2 RMSD by Player (with 2021-2024 Data)'
+)
+
+# update size and opacity of markers
+fig.update_traces(
+    marker=dict(size=8, opacity=0.7)
+)
+# add lines for means of PC1 and PC2
+fig.add_hline(y=0.359, line_color="red", line_dash="dash")
+fig.add_vline(x=0.566, line_color="red", line_dash="dash")
+fig.show()
+```
+
+------------------------------------------------------------------------
+
+While the intent of the plot was to display what the typical variance of PC1 and PC2 scores looked like, two hitters immediately stuck out: Pete Alonso and Nathaniel Lowe. Using the plot at the end of the ICC section (see [9: Run Intraclass Correlations Between Years]), I noticed a similar PC1 pattern for Alonso and Lowe. Alonso started with high PC1 scores in 2021 (1.15) and 2022 (1.51), but these scores drastically decreased to -1.62 in 2023 and -1.88 in 2024. Lowe started with a low PC1 score in 2021 (-1.30), went to a high score in 2022 (1.70), then back to a low score in 2023 (-0.86) and a very low score in 2024 (-2.16). Given the drastic deviations for Alonso and Lowe, it would be interesting to see if these could be explained by differences in how these two were pitched between seasons, or if they made deliberate changes to their approach between 2021 and 2024.
+
+# 10: Average PC1 and PC2 Scores
+
+Purely for amusement purposes, I plotted the average PC1 and PC2 scores to look at specific players, adapting the code from the RMSD plot. Even though I have drawn attention to follow-up investigations that need to further validate the ideas proposed in this report, it is still fun to look at how the trends map to real hitters and speculate a bit.
+
+```{python}
+fig = px.scatter(
+    summary_icc_PCs, 
+    x='PC1_mean',
+    y='PC2_mean', 
+    hover_data=['last_name, first_name', 'player_id'],
+    labels={
+        'PC1_mean': 'Average PC1 Score', 
+        'PC2_mean': 'Average PC2 Score', 
+        'last_name, first_name': 'Player'
+        },
+    title='PC1 vs. PC2 by Player (with 2021-2024 Data)'
+)
+
+fig.update_traces(
+    marker=dict(size=8, opacity=0.7)
+)
+
+fig.show()
+```
+
+------------------------------------------------------------------------
+
+Most hitters fall within the relatively "normal" range for each score. Nick Castellanos had the highest PC1 score (3.39), but had a relatively normal PC2 score (-0.36), suggesting he is an aggressive hitter, without expanding the zone too much. Unsurprisingly, Juan Soto had by far the lowest PC1 score (-3.56), and was among the highest scores for PC2 (1.16). Soto is known for being an incredibly patient hitter, so this tracks with the constructs of PC1 and PC2. Marcus Semien and Freddie Freeman had the two highest PC2 scores (1.64 and 1.48, respectively), but had medium- to medium-high PC1 scores. Even though Soto has been hailed as having one of the best "eyes" for seeing pitches, Semien and Freeman may actually have a slight edge when viewed from their ability to swing at good pitches at the expense of bad ones. Perhaps the most peculiar finding was Nolan Arenado having the lowest PC2 score among hitters with all four seasons (-1.24). This may reflect a tendency to chase, a low swing percentage on good pitches to hit, or perhaps Arenado sees himself as a "bad-ball" hitter, and does not mind hitting pitches out of the zone.
+
+# 10: Summary/Conclusion
+
+To reiterate the summary of section [8: Inter-Year Interpretation], the PCA results collapsed variance in swing decision metrics and produced two PCs that captured complementary constructs. The first PC captured a hitter's tendency to swing in general, while the second captured the hitter's tendency to swing at good pitches at the expense of swinging at bad ones. Because hitters varied more in PC1 than PC2, this suggests chase rate and other plate discipline metrics may be more reflective of a hitter's general tendency to swing than initially thought. Hitters' PC1 and PC2 scores were relatively stable between years, which suggests these may relate to a hitter's inherent skill set. Lastly, PC scores were minimally associated with performance metrics, which suggests these scores alone are not predictive of performance, and there is not an ideal score for either.
+
+# 11: Future Directions
+
+Future investigations can build off these results by analyzing swing decision data with greater specificity. This includes separating swing decisions in different counts (e.g., two-strike counts vs. all other counts), or distinguishing chase pitches from other out of zone pitches, since chase pitches are thrown to look like a strike before ending as a ball. Even though the present data contained metrics on how the hitter was pitched (e.g., in zone %, out zone %, etc.), I specifically excluded these features form the PCA model because of the potential challenges with the interpretation. For instance, do hitters swing at more pitches out of the zone because they see more pitches out of the zone, or are they thrown more pitches out of the zone because pitchers think they are more likely to swing? Again, more fine-grained analyses can start to unravel the role of pitches the hitter sees and the context of the plate appearance in their swing decisions.
+
+# Acknowledgements
+
+This represents the first report where I used [Plotly](https://plotly.com/python/)–and [Plotly Express](https://plotly.com/python/plotly-express/), more specifically–for my visualizations. I would highly recommend their library, as the ability to hover over specific data points made the figures in this report easier to interpret. Despite this being my first report posted online using PCA, I used it previously in an academic project for my M.S. in Data Analytics from Western Governors University (WGU). Some of the code used for the PCA model here was adapted from that project, but I am unable to cite it because I am unable to put my coursework online.
+
+{{< pagebreak >}}
+
+# References
