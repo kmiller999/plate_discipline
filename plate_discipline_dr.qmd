@@ -60,10 +60,10 @@ from IPython.display import Markdown, display
 
 ```{python}
 # import yearly data as csvs 
-disc_df_24 = pd.read_csv('data/plate_discipline_24.csv')
-disc_df_23 = pd.read_csv('data/plate_discipline_23.csv')
-disc_df_22 = pd.read_csv('data/plate_discipline_22.csv')
-disc_df_21 = pd.read_csv('data/plate_discipline_21.csv')
+disc_df_24 = pd.read_csv('../data/plate_discipline_24.csv')
+disc_df_23 = pd.read_csv('../data/plate_discipline_23.csv')
+disc_df_22 = pd.read_csv('../data/plate_discipline_22.csv')
+disc_df_21 = pd.read_csv('../data/plate_discipline_21.csv')
 
 # inspect columns
 disc_df_24.columns
