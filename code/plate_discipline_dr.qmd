@@ -1,6 +1,6 @@
 ---
 title: "Plate Discipline Dimensionality Reduction"
-author: "Kevin B. Miller"
+author: "Kevin Miller"
 date: 2025/07/01
 output: html_document
 toc: true 
