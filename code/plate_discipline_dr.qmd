@@ -492,7 +492,7 @@ perform_corr_plot.update_traces(
 
 The potential associations between the PCs and performance metrics appear to be the weakest of all, which suggests that PC scores alone may have little to do with a hitter's performance. The plots for PC1 appear to be mostly noise, whereas PC2 may have very weak negative associations with xwOBA, barrel percentage, and hard hit percentage. This suggest hitters with higher PC2 scores–who tend to swing at more pitches out of the zone or more pitches overall–may tend to have lower hard hit and barrel percentages, as well as xwOBA.
 
-## PCA Interpretation
+## 4.2: PCA Interpretation
 
 To reiterate the PCA results, PC1 and PC2 combined to explain 97.2% of the variance in swing decisions. PC1 appeared captured a hitter's tendency to swing at any type of pitch, while PC2 captured the hitter's tendency to swing at any pitch or pitches out of the zone, at the expense of swinging at meatballs and pitches in the zone. As expected, PC1 was negatively associated with pitches per plate appearance and walk percentage, whereas PC2 was negatively associated with walk percentage. PC1 scores were positively associated with the percentage of pitches a hitter saw out of the zone, suggesting these hitters may see fewer good pitches to hit. Finally, neither PC1 nor PC2 exhibited strong associations with performance metrics, suggesting PC1 and PC2 scores alone are not related to the hitter's performance.
 
