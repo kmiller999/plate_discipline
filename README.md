@@ -2,7 +2,7 @@
 
 This project analyzed aggregated swing decision data from MLB hitters using Principal Component Analysis (PCA). This model reconstructed the original variance into new components that characterized hitters more efficiently. The two prominent components have notable implications for how plate discipline metrics are discussed and used to characterize hitters.
 
-Rendered .html version is available on my portfolio {insert link here}
+The rendered [.html version](https://kmiller999.github.io/ds_portfolio/posts/plate_discipline/code/plate_discipline_dr.html) of this project is available on my portfolio website.
 
 ## Data Source
 
